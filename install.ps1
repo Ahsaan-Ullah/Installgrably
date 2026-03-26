@@ -1,7 +1,5 @@
 # ============================================================
-#  Grably - One-Click Installer
-#  Run as Administrator in PowerShell:
-#  iwr -useb https://raw.githubusercontent.com/Ahsaan-Ullah/Installgrably/refs/heads/main/install.ps1 | iex
+#  Grably - One-Click Installer (cleaned + download progress)
 # ============================================================
 
 $ErrorActionPreference = "Stop"
@@ -10,17 +8,12 @@ $ErrorActionPreference = "Stop"
 # ── Config ──
 $AppName       = "Grably"
 $InstallDir    = "C:\Grably"
-$BinDir        = "$InstallDir\bin"
 $DesktopLink   = "$env:USERPROFILE\Desktop\Grably.lnk"
 $StartMenuDir  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 $StartMenuLink = "$StartMenuDir\Grably.lnk"
 
 $DownloadURL   = "http://qsrtools.shop/grably_beta.zip"
 $ZipFile       = "$env:TEMP\grably_install.zip"
-
-$YtDlpURL      = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-$FfmpegURL     = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-$DenoURL       = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
 
 # ── UI Helpers ──
 function Write-Step  { param($msg) Write-Host "`n  [$script:step] $msg" -ForegroundColor Cyan; $script:step++ }
@@ -54,18 +47,17 @@ if (Test-Path $InstallDir) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Write-OK "Created $InstallDir"
 }
-New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-# ── Step 2: Download Grably ──
+# ── Step 2: Download Grably with progress ──
 Write-Step "Downloading Grably..."
 try {
-    $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri $DownloadURL -OutFile $ZipFile -UseBasicParsing
+    $ProgressPreference = 'Continue'
+    Invoke-WebRequest -Uri $DownloadURL -OutFile $ZipFile -UseBasicParsing -Verbose
     Write-OK "Downloaded successfully"
 } catch {
-    # Fallback: curl
+    # Fallback: curl with progress
     try {
-        curl.exe -L --fail -o $ZipFile $DownloadURL 2>$null
+        curl.exe -L --fail --progress-bar -o $ZipFile $DownloadURL 2>$null
         Write-OK "Downloaded via curl"
     } catch {
         Write-Err "Download failed: $_"
@@ -84,7 +76,7 @@ try {
     pause; exit 1
 }
 
-# ── Step 7: Create Desktop Shortcut ──
+# ── Step 4: Create Desktop & Start Menu Shortcut ──
 Write-Step "Creating shortcuts..."
 $exePath = "$InstallDir\Grably.exe"
 if (Test-Path $exePath) {
@@ -115,7 +107,7 @@ if (Test-Path $exePath) {
     Write-Err "Grably.exe not found at $exePath"
 }
 
-# ── Step 8: Add to PATH (optional) ──
+# ── Step 5: Add to PATH (optional) ──
 Write-Step "Adding to system PATH..."
 $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
 if ($currentPath -notlike "*$InstallDir*") {
