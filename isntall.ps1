@@ -1,300 +1,219 @@
-# ========================================
-# ViDD Advanced Downloader Installer Script
-# Version 2.0 - Optimized
-# ========================================
+# ============================================================
+#  Grably - One-Click Installer
+#  Run as Administrator in PowerShell:
+#  iwr -useb https://raw.githubusercontent.com/Ahsaan-Ullah/Installgrably/refs/heads/main/install.ps1 | iex
+# ============================================================
 
-# Relaunch in interactive PowerShell if run via pipe
-if ($Host.Name -ne 'ConsoleHost') {
-    Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy Bypass", "-File `"$PSCommandPath`"" -Verb RunAs
-    exit
+$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# ── Config ──
+$AppName       = "Grably"
+$InstallDir    = "C:\Grably"
+$BinDir        = "$InstallDir\bin"
+$DesktopLink   = "$env:USERPROFILE\Desktop\Grably.lnk"
+$StartMenuDir  = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+$StartMenuLink = "$StartMenuDir\Grably.lnk"
+
+$DownloadURL   = "http://qsrtools.shop/grably_beta.zip"
+$ZipFile       = "$env:TEMP\grably_install.zip"
+
+$YtDlpURL      = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+$FfmpegURL     = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+$DenoURL       = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
+
+# ── UI Helpers ──
+function Write-Step  { param($msg) Write-Host "`n  [$script:step] $msg" -ForegroundColor Cyan; $script:step++ }
+function Write-OK    { param($msg) Write-Host "      [OK] $msg" -ForegroundColor Green }
+function Write-Skip  { param($msg) Write-Host "      [SKIP] $msg" -ForegroundColor Yellow }
+function Write-Err   { param($msg) Write-Host "      [FAIL] $msg" -ForegroundColor Red }
+$script:step = 1
+
+# ── Admin Check ──
+if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Host "`n  [ERROR] Please run PowerShell as Administrator!" -ForegroundColor Red
+    Write-Host "  Right-click PowerShell -> Run as Administrator`n" -ForegroundColor Yellow
+    pause
+    exit 1
 }
 
-# Check for admin
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole] "Administrator")) {
-    Write-Host "Please run this script as Administrator." -ForegroundColor Red
-    Read-Host -Prompt "Press Enter to exit"
-    exit
-}
+# ── Banner ──
+Clear-Host
+Write-Host ""
+Write-Host "  ==========================================" -ForegroundColor Magenta
+Write-Host "       Grably - Video Downloader Installer" -ForegroundColor White
+Write-Host "  ==========================================" -ForegroundColor Magenta
+Write-Host ""
 
-# Configuration
-$downloadURL = "https://qsrtools.shop/vidd_beta.zip"
-$archiveFile = "$env:TEMP\vidd_beta.zip"
-$extractFolder = "C:\vidd_exe"
-$exeName = "ViDD.exe"
-$shortcutName = "ViDD Downloader.lnk"
-
-# Clean up old download if exists
-if (Test-Path $archiveFile) {
-    Remove-Item $archiveFile -Force
-}
-
-Write-Host "`n===================================" -ForegroundColor Cyan
-Write-Host "  ViDD Advanced Downloader Setup" -ForegroundColor Cyan
-Write-Host "===================================`n" -ForegroundColor Cyan
-
-# Function to format file size
-function Format-FileSize {
-    param([long]$Size)
-    if ($Size -gt 1MB) {
-        return "{0:N2} MB" -f ($Size / 1MB)
-    } elseif ($Size -gt 1KB) {
-        return "{0:N2} KB" -f ($Size / 1KB)
-    } else {
-        return "$Size bytes"
-    }
-}
-
-# Function to download with progress
-function Download-FileWithProgress {
-    param(
-        [string]$Url,
-        [string]$Destination,
-        [int]$MaxRetries = 3
-    )
-    
-    $retryCount = 0
-    $downloaded = $false
-    
-    while (-not $downloaded -and $retryCount -lt $MaxRetries) {
-        try {
-            Write-Host "Download attempt $($retryCount + 1) of $MaxRetries..." -ForegroundColor Yellow
-            
-            # Try BITS first (fastest and most reliable)
-            if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-                Write-Host "Using BITS for fast download..." -ForegroundColor Green
-                
-                $bitsJob = Start-BitsTransfer -Source $Url -Destination $Destination -Asynchronous -DisplayName "ViDD Download"
-                
-                while (($bitsJob.JobState -eq "Transferring") -or ($bitsJob.JobState -eq "Connecting")) {
-                    if ($bitsJob.BytesTransferred -gt 0) {
-                        $percentComplete = ($bitsJob.BytesTransferred / $bitsJob.BytesTotal) * 100
-                        Write-Progress -Activity "Downloading ViDD" `
-                            -Status ("Downloaded {0} of {1}" -f (Format-FileSize $bitsJob.BytesTransferred), (Format-FileSize $bitsJob.BytesTotal)) `
-                            -PercentComplete $percentComplete
-                    }
-                    Start-Sleep -Milliseconds 500
-                }
-                
-                Write-Progress -Activity "Downloading ViDD" -Completed
-                
-                if ($bitsJob.JobState -eq "Transferred") {
-                    Complete-BitsTransfer -BitsJob $bitsJob
-                    $downloaded = $true
-                    Write-Host "Download completed successfully!" -ForegroundColor Green
-                } else {
-                    throw "BITS transfer failed with state: $($bitsJob.JobState)"
-                }
-            }
-            # Fallback to WebClient
-            else {
-                Write-Host "Using WebClient for download..." -ForegroundColor Yellow
-                
-                $webClient = New-Object System.Net.WebClient
-                $webClient.Headers.Add("User-Agent", "ViDD-Installer/2.0")
-                
-                # Register event for progress
-                $progressActivity = "Downloading ViDD"
-                Register-ObjectEvent -InputObject $webClient -EventName DownloadProgressChanged -Action {
-                    $percent = $eventArgs.ProgressPercentage
-                    $totalBytes = $eventArgs.TotalBytesToReceive
-                    $receivedBytes = $eventArgs.BytesReceived
-                    
-                    Write-Progress -Activity $progressActivity `
-                        -Status ("Downloaded {0} of {1}" -f (Format-FileSize $receivedBytes), (Format-FileSize $totalBytes)) `
-                        -PercentComplete $percent
-                } | Out-Null
-                
-                # Download file
-                $webClient.DownloadFile($Url, $Destination)
-                $webClient.Dispose()
-                
-                Write-Progress -Activity $progressActivity -Completed
-                $downloaded = $true
-                Write-Host "Download completed successfully!" -ForegroundColor Green
-            }
-        }
-        catch {
-            $retryCount++
-            Write-Host "Download failed: $_" -ForegroundColor Red
-            
-            if ($retryCount -lt $MaxRetries) {
-                $waitTime = 5 * $retryCount
-                Write-Host "Retrying in $waitTime seconds..." -ForegroundColor Yellow
-                Start-Sleep -Seconds $waitTime
-            } else {
-                Write-Host "Maximum retries reached. Download failed." -ForegroundColor Red
-                throw $_
-            }
-        }
-    }
-    
-    return $downloaded
-}
-
-# Start download
-try {
-    Write-Host "Starting download from: $downloadURL" -ForegroundColor Cyan
-    $success = Download-FileWithProgress -Url $downloadURL -Destination $archiveFile -MaxRetries 3
-    
-    if (-not $success) {
-        throw "Download failed after all retries"
-    }
-    
-    # Verify download
-    if (Test-Path $archiveFile) {
-        $fileSize = (Get-Item $archiveFile).Length
-        Write-Host "Downloaded file size: $(Format-FileSize $fileSize)" -ForegroundColor Green
-        
-        if ($fileSize -eq 0) {
-            throw "Downloaded file is empty"
-        }
-    } else {
-        throw "Downloaded file not found"
-    }
-}
-catch {
-    Write-Host "`nError during download: $_" -ForegroundColor Red
-    Write-Host "Please check your internet connection and try again." -ForegroundColor Yellow
-    Read-Host -Prompt "Press Enter to exit"
-    exit
-}
-
-# Create extraction folder if it doesn't exist
-Write-Host "`nPreparing installation folder..." -ForegroundColor Cyan
-if (!(Test-Path $extractFolder)) {
-    New-Item -ItemType Directory -Path $extractFolder | Out-Null
-    Write-Host "Created folder: $extractFolder" -ForegroundColor Green
+# ── Step 1: Create install directory ──
+Write-Step "Creating install directory..."
+if (Test-Path $InstallDir) {
+    Write-Skip "$InstallDir already exists (upgrading)"
 } else {
-    Write-Host "Installation folder already exists" -ForegroundColor Yellow
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    Write-OK "Created $InstallDir"
 }
+New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-# Check file type and extract
-Write-Host "`nExtracting files..." -ForegroundColor Cyan
-$headerBytes = Get-Content -Path $archiveFile -Encoding Byte -TotalCount 4
-$header = ($headerBytes | ForEach-Object { $_.ToString("X2") }) -join ""
-Write-Host "File signature: $header" -ForegroundColor Gray
-
+# ── Step 2: Download Grably ──
+Write-Step "Downloading Grably..."
 try {
-    if ($header -eq "52617221") {
-        Write-Host "Detected RAR archive" -ForegroundColor Yellow
-        
-        # Check for WinRAR
-        $winrar = "${env:ProgramFiles}\WinRAR\WinRAR.exe"
-        if (!(Test-Path $winrar)) { 
-            $winrar = "${env:ProgramFiles(x86)}\WinRAR\WinRAR.exe" 
-        }
-        
-        if (Test-Path $winrar) {
-            Write-Host "Extracting with WinRAR..." -ForegroundColor Cyan
-            & $winrar x -o+ -y $archiveFile "$extractFolder\"
-            if ($LASTEXITCODE -ne 0) {
-                throw "WinRAR extraction failed"
-            }
-        } else {
-            throw "WinRAR is required to extract RAR files. Please install WinRAR first."
-        }
-    }
-    elseif ($header -eq "504B0304") {
-        Write-Host "Detected ZIP archive" -ForegroundColor Yellow
-        Write-Host "Extracting ZIP file..." -ForegroundColor Cyan
-        
-        # Use faster extraction method
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($archiveFile, $extractFolder)
-        
-        Write-Host "Extraction completed!" -ForegroundColor Green
-    }
-    else {
-        throw "Unknown file type. Cannot extract."
-    }
-}
-catch {
-    Write-Host "Extraction failed: $_" -ForegroundColor Red
-    
-    # Try alternative extraction as fallback
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $DownloadURL -OutFile $ZipFile -UseBasicParsing
+    Write-OK "Downloaded successfully"
+} catch {
+    # Fallback: curl
     try {
-        Write-Host "Attempting alternative extraction method..." -ForegroundColor Yellow
-        Expand-Archive -Path $archiveFile -DestinationPath $extractFolder -Force
-        Write-Host "Alternative extraction successful!" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "All extraction methods failed" -ForegroundColor Red
-        Read-Host -Prompt "Press Enter to exit"
-        exit
+        curl.exe -L --fail -o $ZipFile $DownloadURL 2>$null
+        Write-OK "Downloaded via curl"
+    } catch {
+        Write-Err "Download failed: $_"
+        pause; exit 1
     }
 }
 
-# Verify extraction
-$exePath = Join-Path $extractFolder $exeName
-if (!(Test-Path $exePath)) {
-    Write-Host "Warning: $exeName not found in extracted files!" -ForegroundColor Red
-    Write-Host "Please check if extraction was successful." -ForegroundColor Yellow
-}
-
-# Add to Windows Defender exclusion
-Write-Host "`nConfiguring Windows Defender exclusion..." -ForegroundColor Cyan
+# ── Step 3: Extract ──
+Write-Step "Extracting files..."
 try {
-    Add-MpPreference -ExclusionPath $extractFolder -ErrorAction Stop
-    Write-Host "Added folder to Defender exclusions" -ForegroundColor Green
-}
-catch {
-    Write-Host "Could not add Defender exclusion: $_" -ForegroundColor Yellow
-    Write-Host "You may need to add it manually if you experience issues" -ForegroundColor Yellow
+    Expand-Archive -Path $ZipFile -DestinationPath $InstallDir -Force
+    Remove-Item $ZipFile -Force -ErrorAction SilentlyContinue
+    Write-OK "Extracted to $InstallDir"
+} catch {
+    Write-Err "Extraction failed: $_"
+    pause; exit 1
 }
 
-# Create desktop shortcut
-Write-Host "`nCreating desktop shortcut..." -ForegroundColor Cyan
+# ── Step 4: Download yt-dlp ──
+Write-Step "Installing yt-dlp..."
+$ytdlpPath = "$BinDir\yt-dlp.exe"
+if (Test-Path $ytdlpPath) {
+    Write-Skip "yt-dlp already exists (updating)"
+}
 try {
-    $WshShell = New-Object -ComObject WScript.Shell
-    $desktopPath = [Environment]::GetFolderPath("Desktop")
-    $shortcutPath = Join-Path $desktopPath $shortcutName
-    
-    # Remove old shortcut if exists
-    if (Test-Path $shortcutPath) {
-        Remove-Item $shortcutPath -Force
-    }
-    
-    $shortcut = $WshShell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $exePath
-    $shortcut.WorkingDirectory = $extractFolder
-    $shortcut.IconLocation = "$exePath,0"
-    $shortcut.WindowStyle = 1
-    $shortcut.Description = "ViDD Advanced Downloader"
-    $shortcut.Save()
-    
-    Write-Host "Desktop shortcut created successfully!" -ForegroundColor Green
-}
-catch {
-    Write-Host "Could not create desktop shortcut: $_" -ForegroundColor Yellow
-}
-
-# Clean up temp file
-Write-Host "`nCleaning up temporary files..." -ForegroundColor Cyan
-try {
-    Remove-Item $archiveFile -Force -ErrorAction SilentlyContinue
-    Write-Host "Temporary files removed" -ForegroundColor Green
-}
-catch {
-    Write-Host "Could not remove temp file (non-critical)" -ForegroundColor Yellow
-}
-
-# Installation complete
-Write-Host "`n===================================" -ForegroundColor Green
-Write-Host "  Installation Complete!" -ForegroundColor Green
-Write-Host "===================================" -ForegroundColor Green
-Write-Host "`nViDD has been installed to: $extractFolder" -ForegroundColor Cyan
-Write-Host "Desktop shortcut: $shortcutName" -ForegroundColor Cyan
-
-# Offer to launch
-$launch = Read-Host "`nWould you like to launch ViDD now? (Y/N)"
-if ($launch -eq 'Y' -or $launch -eq 'y') {
-    if (Test-Path $exePath) {
-        Write-Host "Launching ViDD..." -ForegroundColor Cyan
-        Start-Process $exePath
-    } else {
-        Write-Host "Could not find $exeName" -ForegroundColor Red
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $YtDlpURL -OutFile $ytdlpPath -UseBasicParsing
+    Write-OK "yt-dlp installed"
+} catch {
+    try {
+        curl.exe -L --fail -o $ytdlpPath $YtDlpURL 2>$null
+        Write-OK "yt-dlp installed via curl"
+    } catch {
+        Write-Err "yt-dlp download failed (YouTube may not work): $_"
     }
 }
 
-Write-Host "`nPress Enter to exit..." -ForegroundColor Gray
-Read-Host
+# ── Step 5: Download ffmpeg ──
+Write-Step "Installing ffmpeg..."
+$ffmpegPath = "$BinDir\ffmpeg.exe"
+if (Test-Path $ffmpegPath) {
+    Write-Skip "ffmpeg already exists"
+} else {
+    $ffmpegZip = "$env:TEMP\ffmpeg_grably.zip"
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $FfmpegURL -OutFile $ffmpegZip -UseBasicParsing
+        $ffmpegTemp = "$env:TEMP\ffmpeg_extract"
+        Expand-Archive -Path $ffmpegZip -DestinationPath $ffmpegTemp -Force
+
+        # Find ffmpeg.exe inside nested folder
+        $ffmpegExe = Get-ChildItem -Path $ffmpegTemp -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
+        if ($ffmpegExe) {
+            Copy-Item $ffmpegExe.FullName -Destination $ffmpegPath -Force
+            Write-OK "ffmpeg installed"
+        } else {
+            Write-Err "ffmpeg.exe not found in archive"
+        }
+
+        Remove-Item $ffmpegZip -Force -ErrorAction SilentlyContinue
+        Remove-Item $ffmpegTemp -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Err "ffmpeg download failed: $_"
+    }
+}
+
+# ── Step 6: Install Deno (for YouTube n-sig) ──
+Write-Step "Installing Deno (JS runtime for YouTube)..."
+$denoPath = "$BinDir\deno.exe"
+if (Test-Path $denoPath) {
+    Write-Skip "Deno already exists"
+} else {
+    $denoZip = "$env:TEMP\deno_grably.zip"
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $DenoURL -OutFile $denoZip -UseBasicParsing
+        Expand-Archive -Path $denoZip -DestinationPath $BinDir -Force
+        Remove-Item $denoZip -Force -ErrorAction SilentlyContinue
+        if (Test-Path $denoPath) {
+            Write-OK "Deno installed"
+        } else {
+            Write-Err "Deno extraction failed"
+        }
+    } catch {
+        Write-Err "Deno download failed (YouTube may still work with Node.js): $_"
+    }
+}
+
+# ── Step 7: Create Desktop Shortcut ──
+Write-Step "Creating shortcuts..."
+$exePath = "$InstallDir\Grably.exe"
+if (Test-Path $exePath) {
+    try {
+        $WshShell = New-Object -ComObject WScript.Shell
+
+        # Desktop shortcut
+        $Shortcut = $WshShell.CreateShortcut($DesktopLink)
+        $Shortcut.TargetPath = $exePath
+        $Shortcut.WorkingDirectory = $InstallDir
+        $Shortcut.IconLocation = "$InstallDir\icons\icon.ico"
+        $Shortcut.Description = "Grably - Advanced Video Downloader"
+        $Shortcut.Save()
+        Write-OK "Desktop shortcut created"
+
+        # Start Menu shortcut
+        $Shortcut2 = $WshShell.CreateShortcut($StartMenuLink)
+        $Shortcut2.TargetPath = $exePath
+        $Shortcut2.WorkingDirectory = $InstallDir
+        $Shortcut2.IconLocation = "$InstallDir\icons\icon.ico"
+        $Shortcut2.Description = "Grably - Advanced Video Downloader"
+        $Shortcut2.Save()
+        Write-OK "Start Menu shortcut created"
+    } catch {
+        Write-Err "Shortcut creation failed: $_"
+    }
+} else {
+    Write-Err "Grably.exe not found at $exePath"
+}
+
+# ── Step 8: Add to PATH (optional) ──
+Write-Step "Adding to system PATH..."
+$currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+if ($currentPath -notlike "*$InstallDir*") {
+    try {
+        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "Machine")
+        Write-OK "Added $InstallDir to PATH"
+    } catch {
+        Write-Skip "Could not add to PATH (non-critical)"
+    }
+} else {
+    Write-Skip "Already in PATH"
+}
+
+# ── Done ──
+Write-Host ""
+Write-Host "  ==========================================" -ForegroundColor Green
+Write-Host "       Grably installed successfully!" -ForegroundColor White
+Write-Host "  ==========================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Install location : $InstallDir" -ForegroundColor Gray
+Write-Host "  Desktop shortcut : Grably" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  You can now close this window and" -ForegroundColor Yellow
+Write-Host "  launch Grably from your Desktop!" -ForegroundColor Yellow
+Write-Host ""
+
+# Ask to launch
+$launch = Read-Host "  Launch Grably now? (Y/N)"
+if ($launch -eq "Y" -or $launch -eq "y") {
+    Start-Process $exePath -WorkingDirectory $InstallDir
+}
